@@ -4,31 +4,22 @@ namespace ConverterAPI.Services
 {
     public class CurrencyService : ICurrencyService
     {
-        public readonly IConfiguration Configuration;
+        private readonly IConfiguration Configuration;
+        private readonly IHttpClientFactory _httpClientFactory;
+        private string apiKey;
 
-        public CurrencyService(IConfiguration configuration)
+        public CurrencyService(IConfiguration configuration, IHttpClientFactory httpClientFactory)
         {
             Configuration = configuration;
+            _httpClientFactory = httpClientFactory;
             apiKey = Configuration["Freecurrencyapi:API-Key"];
         }
 
-        private string apiKey;
-
         public async Task<string> GetCurrency(string from, string to, double numberFrom)
         {
-            using (var client = new HttpClient())
-            {
-                try
-                {
-                    var convertedValue = await GetConvertedValue(client, from, to, numberFrom);
+            var convertedValue = await GetConvertedValue(from, to, numberFrom);
 
-                    return $"{from} {numberFrom} = {to} {convertedValue}";
-                }
-                catch (Exception)
-                {
-                    return "Error";
-                }
-            }
+            return $"{from} {numberFrom} = {to} {convertedValue}";
         }
 
         public async Task<string> CurrenciesSummation(string from, string to, double numberFrom, double summand)
@@ -39,22 +30,13 @@ namespace ConverterAPI.Services
                 return $"{from} {numberFrom} + {to} {summand} = {to} {summ}";
             }
 
-            using (var client = new HttpClient())
-            {
-                try
-                {
-                    var summFrom = await CurrencySumming(client, from, to, summand, numberFrom);
+            var summFrom = await CurrencySumming(from, to, summand, numberFrom);
 
-                    var summSummand = await CurrencySumming(client, to, from, numberFrom, summand);
+            var summSummand = await CurrencySumming(to, from, numberFrom, summand);
 
-                    return $"{from} {numberFrom} + {to} {summand} = {to} {summFrom} or {from} {summSummand}";
-                }
-                catch (Exception)
-                {
-                    return "Error";
-                }
-            }
+            return $"{from} {numberFrom} + {to} {summand} = {to} {summFrom} or {from} {summSummand}";
         }
+
 
         public async Task<string> CurrenciesSubtraction(string from, string to, double numberFrom, double subtractor)
         {
@@ -62,58 +44,64 @@ namespace ConverterAPI.Services
             {
                 var summ = numberFrom - subtractor;
 
-                return summ < 0 ? "Number cannot be negative" : $"{from} {numberFrom} - {to} {subtractor} = {to} {summ}";
+                if (summ < 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(summ));
+                }
+
+                return $"{from} {numberFrom} - {to} {subtractor} = {to} {summ}";
             }
 
-            using (var client = new HttpClient())
+            var summFrom = await CurrencySubtraction(from, to, subtractor, numberFrom);
+
+            if (summFrom < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(summFrom));
+            }
+
+            var summSummand = await GetConvertedValue(to, from, summFrom);
+
+            return $"{from} {numberFrom} - {to} {subtractor} = {to} {summFrom} or {from} {summSummand}";
+        }
+
+        private async Task<double> GetConvertedValue(string from, string to, double numberFrom)
+        {
+            using (var client = _httpClientFactory.CreateClient())
             {
                 try
                 {
-                    var summFrom = await CurrencySubtraction(client, from, to, subtractor, numberFrom);
+                    client.BaseAddress = new Uri("https://freecurrencyapi.net");
+                    var response = await client.GetAsync($"/api/v2/latest?apikey={apiKey}&base_currency={from.Trim()}");
 
-                    if (summFrom < 0)
-                    {
-                        return "Number cannot be negative";
-                    }
-                    
-                    var summSummand = await GetConvertedValue(client, to, from, summFrom);
+                    var stringResult = await response.Content.ReadAsStringAsync();
+                    var currenciesJson = JObject.Parse(stringResult)["data"];
 
-                    return $"{from} {numberFrom} - {to} {subtractor} = {to} {summFrom} or {from} {summSummand}";
+                    var currencyValue =
+                        (double)JObject.Parse(currenciesJson?.ToString() ?? "The conversion service is not available")[
+                            $"{to.Trim()}"]!;
+                    var convertedValue = numberFrom * currencyValue;
+
+                    return convertedValue;
                 }
                 catch (Exception)
                 {
-                    return "Error";
+                    throw;
                 }
             }
         }
 
-        private async Task<double> GetConvertedValue(HttpClient client, string from, string to, double numberFrom)
+
+        private async Task<double> CurrencySubtraction(string from, string to, double numberFrom, double summand)
         {
-            var response = await client.GetAsync(
-                $"https://freecurrencyapi.net/api/v2/latest?apikey={apiKey}&base_currency={from.Trim()}");
-
-            var stringResult = await response.Content.ReadAsStringAsync();
-            var currenciesJson = JObject.Parse(stringResult)["data"];
-
-            var currencyValue =
-                (double)JObject.Parse(currenciesJson?.ToString() ?? "The conversion service is not available")[
-                    $"{to.Trim()}"]!;
-            var convertedValue = numberFrom * currencyValue;
-
-            return convertedValue;
-        }
-
-        private async Task<double> CurrencySubtraction(HttpClient client, string from, string to, double numberFrom, double summand)
-        {
-            var convertedSummandValue = await GetConvertedValue(client, from, to, summand);
+            var convertedSummandValue = await GetConvertedValue(from, to, summand);
             var summSummand = convertedSummandValue - numberFrom;
-            
+
             return summSummand;
         }
 
-        private async Task<double> CurrencySumming(HttpClient client, string from, string to, double numberFrom, double summand)
+        private async Task<double> CurrencySumming(string from, string to, double numberFrom, double summand)
         {
-            var convertedSummandValue = await GetConvertedValue(client, from, to, summand);
+            var convertedSummandValue = await GetConvertedValue(from, to, summand);
             var summSummand = convertedSummandValue + numberFrom;
 
             return summSummand;
